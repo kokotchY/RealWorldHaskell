@@ -81,6 +81,17 @@ type Greymap = Array (Int,Int) Pixel
 pixmapToGreymap :: Pixmap -> Greymap
 pixmapToGreymap = fmap luminance
 
+foldA :: Ix k =>(a -> b -> a) -> a -> Array k b -> a
+foldA f s a = go s (indices a)
+    where
+        go s (j:js) = 
+            let s' = f s (a ! j)
+            in s' `seq` go s' js
+        go s _ = s
+
+foldA1 :: Ix k => (a -> a -> a) -> Array k a -> a
+foldA1 f a = foldA f (a ! fst (bounds a)) a
+
 data Bit = Zero | One
     deriving (Eq, Show)
 
@@ -93,3 +104,110 @@ threshold n a = binary <$> a
         least = fromIntegral $ choose (<) a
         greatest = fromIntegral $ choose (>) a
         choose f = foldA1 $ \x y -> if f x y then x else y
+
+type Run = Int
+type RunLength a = [(Run, a)]
+
+runLength :: Eq a => [a] -> RunLength a
+runLength = map rle . group
+    where
+        rle xs = (length xs, head xs)
+
+runLengths :: Eq a => [a] -> [Run]
+runLengths = map fst . runLength
+
+type Score = Ratio Int
+
+scaleToOne :: [Run] -> [Score]
+scaleToOne xs = map divide xs 
+    where
+        divide d = fromIntegral d / divisor
+        divisor = fromIntegral (sum xs)
+
+type ScoreTable = [[Score]]
+asSRL :: [String] -> ScoreTable
+asSRL = map (scaleToOne . runLengths)
+
+leftOddSRL = asSRL leftOddList
+leftEvenSRL = asSRL leftEvenList
+rightSRL = asSRL rightList
+paritySRL = asSRL parityList
+
+distance :: [Score] -> [Score] -> Score
+distance a b = sum . map abs $ zipWith (-) a b
+
+type Digit = Word8
+
+bestScores :: ScoreTable -> [Run] -> [(Score, Digit)]
+bestScores srl ps = take 3 . sort $ scores
+    where
+        scores = zip [distance d (scaleToOne ps) | d <- srl] digits
+        digits = [0..9]
+
+data Parity a = Even a | Odd a | None a
+    deriving (Show)
+
+fromParity :: Parity a -> a
+fromParity (Even a) = a
+fromParity (Odd a) = a
+fromParity (None a) = a
+
+parityMap :: (a -> b) -> Parity a -> Parity b
+parityMap f (Even a) = Even (f a)
+parityMap f (Odd a) = Odd (f a)
+parityMap f (None a) = None (f a)
+
+instance Functor Parity where
+    fmap = parityMap
+
+on :: (a -> a -> b) -> (c -> a) -> c -> c -> b
+on f g x y = g x `f` g y
+
+compareWithoutParity = compare `on` fromParity
+
+bestLeft :: [Run] -> [Parity (Score, Digit)]
+bestLeft ps = sortBy compareWithoutParity ((map Odd (bestScores leftOddSRL ps)) ++ (map Even (bestScores leftEvenSRL ps)))
+
+bestRight :: [Run] -> [Parity (Score, Digit)]
+bestRight = map None . bestScores rightSRL
+
+chunkWith :: ([a] -> ([a], [a])) -> [a] -> [[a]]
+chunkWith _ [] = []
+chunkWith f xs = let (h, t) = f xs
+                 in h : chunkWith f t
+
+chunksOf :: Int -> [a] -> [[a]]
+chunksOf n = chunkWith (splitAt n)
+
+candidateDigits :: RunLength Bit -> [[Parity Digit]]
+candidateDigits ((_, One):_) = []
+candidateDigits rle | length rle < 59 = []
+candidateDigits rle
+    | any null match = []
+    | otherwise = map (map (fmap snd)) match
+    where
+        match = map bestLeft left ++  map bestRight right
+        left = chunksOf 4 . take 24 . drop 3 $ runLengths
+        right = chunksOf 4 . take 24 . drop 32 $ runLengths
+        runLengths = map fst rle
+
+type Map a = M.Map Digit [a]
+type DigitMap = Map Digit
+type ParityMap = Map (Parity Digit)
+
+updateMap :: Parity Digit -> Digit -> [Parity Digit] -> ParityMap -> ParityMap 
+updateMap digit key seq = insertMap key (fromParity digit) (digit:seq)
+
+insertMap :: Digit -> Digit -> [a] -> Map a -> Map a
+insertMap key digit val m = val `seq` M.insert key' val m
+    where key' = (key + digit) `mod` 10
+
+useDigit :: ParityMap -> ParityMap -> Parity Digit -> ParityMap
+useDigit old new digit =
+    new `M.union` M.foldWithKey (updateMap digit) M.empty old
+
+incorporateDigits :: ParityMap -> [Parity Digit] -> ParityMap
+incorporateDigits old digits = foldl' (useDigit old) M.empty digits
+
+finalDigits :: [[Parity Digit]] -> ParityMap
+finalDigits = foldl' incorporateDigits (M.singleton 0 []) . mapEveryOther (map (fmap (*3)))
