@@ -13,6 +13,7 @@ main = withSocketsDo $ handleSqlError $ do
     case args of
         ["add", url] -> add dbh url
         ["list"] -> list dbh
+        ["listEpisodes", id] -> listEpisodes dbh (read id :: Integer)
         ["update"] -> update dbh
         ["download"] -> download dbh
         ["remove", id] -> remove dbh (read id :: Integer)
@@ -31,6 +32,16 @@ add dbh url = do
 remove dbh id = do
     removePodcast dbh $ podcastForId id
     commit dbh
+
+listEpisodes dbh id = do
+    podcast <- getPodcast dbh id
+    case podcast of
+        Just p -> do
+            episodes <- getPodcastEpisodes dbh p
+            putStrLn $ "Episodes of podcast " ++ show (castId p) ++ " - " ++ castURL p
+            mapM_ displayEpisode episodes
+            where
+                displayEpisode episode = putStrLn $ show (epId episode) ++ " => " ++ epURL episode
 
 podcastForId :: Integer -> Podcast
 podcastForId id = Podcast { castId = id, castURL = "" }
