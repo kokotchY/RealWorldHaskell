@@ -1,3 +1,4 @@
 pod
 *.mp3
 *.db
+dist
