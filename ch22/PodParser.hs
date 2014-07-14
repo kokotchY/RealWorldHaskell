@@ -21,6 +21,11 @@ data Feed = Feed {
 item2ep :: Podcast -> PodItem -> Episode
 item2ep pc item = Episode {epId = 0, epCast = pc, epURL = encloseurl item, epDone = False }
 
+parseFile :: FilePath -> IO Feed
+parseFile path = do
+    file <- readFile path
+    return $ parse file "name"
+
 parse :: String -> String -> Feed
 parse content name = Feed { channeltitle = getTitle doc, items = getEnclosures doc }
     where
