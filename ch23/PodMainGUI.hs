@@ -73,8 +73,69 @@ guiAdd gui dbh = do
         procOK = do
             url <- entryGetText (awEntry gui)
             widgetHide (addWin gui)
-            add abh url
+            PodMainGUI.add dbh url
 
-guiUpdate = undefined
-guiDownload = undefined
-guiFetch = undefined
+guiUpdate :: IConnection conn => GUI -> conn -> IO ()
+guiUpdate gui dbh = statusWindow gui dbh "Pod: Update" (update dbh)
+
+guiDownload :: IConnection conn => GUI -> conn -> IO ()
+guiDownload gui dbh = statusWindow gui dbh "Pod: Download" (download dbh)
+
+guiFetch :: IConnection conn => GUI -> conn -> IO ()
+guiFetch gui dbh = statusWindow gui dbh "Pod: fetch" (\logf -> update dbh logf >> download dbh logf)
+
+statusWindow :: IConnection conn => GUI -> conn -> String -> ((String -> IO ()) -> IO ()) -> IO ()
+statusWindow gui dbh title func = do
+    labelSetText (swLabel gui) ""
+    widgetSetSensitivity (swOKBt gui) False
+    widgetSetSensitivity (swCancelBt gui) True
+    windowSetTitle (statusWin gui) title
+    childThread <- forkIO childTasks
+    onClicked (swCancelBt gui) (cancelChild childThread)
+    windowPresent (statusWin gui)
+    where
+        childTasks = do
+            updateLabel "Starting thread..."
+            func updateLabel
+            enableOK
+        enableOK = do
+            widgetSetSensitivity (swCancelBt gui) False
+            widgetSetSensitivity (swOKBt gui) True
+            onClicked (swOKBt gui) (widgetHide (statusWin gui))
+            return ()
+        updateLabel text = labelSetText (swLabel gui) text
+        cancelChild childThread = do
+            killThread childThread
+            yield
+            updateLabel "Action has been cancelled."
+            enableOK
+
+add dbh url = do
+    addPodcast dbh pc
+    commit dbh
+    where
+        pc = Podcast {castId = 0, castURL = url}
+
+update :: IConnection conn => conn -> (String -> IO ()) -> IO ()
+update dbh logf = do
+    pclist <- getPodcasts dbh
+    mapM_ procPodcast pclist
+    logf "Update complete."
+    where
+        procPodcast pc = do
+            logf $ "Updating from " ++ (castURL pc)
+            updatePodcastFromFeed dbh pc
+
+download dbh logf = do
+    pclist <- getPodcasts dbh
+    mapM_ procPodcast pclist
+    logf "Download complete."
+    where
+        procPodcast pc = do
+            logf $ "Considering " ++ (castURL pc)
+            episodelist <- getPodcastEpisodes dbh pc
+            let dleps = filter (\ep -> epDone ep == False) episodelist
+            mapM_ procEpisode dleps
+        procEpisode ep = do
+            logf $ "Downloading " ++ (epURL ep)
+            getEpisode dbh ep
